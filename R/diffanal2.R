@@ -2,7 +2,6 @@ require(plyr)
 require(genefilter)
 require(Biobase)
 require(limma)
-require(permute)
 
 # Column names with aggregate meaning will have tokens joined by the JOIN.CHR
 # e.g. cls1-cls2-p.value means the p.value comparing cls1 and cls2.
@@ -10,26 +9,49 @@ JOIN.CHR = "-"
 SAMPLE.ID.COL <- '.rownames'
 STRATEGY = list(t.test = function(){}, survival = function(){}, lm = function(){})
 
-
-# model.formula should have no RHS
-diffanal2 <- function(exprs, pheno, model.formula, ngenes = 250, alpha = 0.05, p.adjust.method = 'none', one.vs.all = F){
-  print(deparse(formals()))
+#' 
+#' 
+#' 
+#' 
+#' @param exprs numeric matrix of gene expression data
+#' @param pheno.frame data.frame. Each column corresponds to a phenotypic predictor or confounder
+#' @param model.formula should have no RHS. Corresponds to the columns in the \code{pheno} data.frame
+#' @param ngenes controls the number of genes to report
+#' @param alpha significance threshold value
+#'   
+diffanal2 <- function(exprs, pheno.frame, model.formula, ngenes = 250, alpha = 0.05, p.adjust.method = 'none', one.vs.all = F){
+  # Gets parameter list, for later writing to file
   print(match.call())
+  
   model.formula.terms <- terms(model.formula)
   # Specify without response variable
-  model.formula.cols <- row.names(attr(model.formula.terms, 'factors'))
-  cleaned <-clean.phenotypes(exprs, pheno, model.formula.cols)
-  exprs <- cleaned[["exprs"]]
-  pheno <- cleaned[["pheno"]]
-  model.cols <- prepare.pheno.model.frame(pheno, model.formula.cols)
-  # Cartesian Product of cofactors separates the specific sample names
-  partitions <- dlply(model.cols, model.formula.cols, function(set) set[,'.rownames'])
-  pairs <- partition.pairs(partitions, one.vs.all = one.vs.all)
-  scores <- do.t.test(exprs, partitions, pairs, one.vs.all = one.vs.all)
-  means <- do.means(exprs, partitions)
-  signif.pairs <- which.significant(scores, alpha)
   
-  return(list(scores=scores, means=means, partitions=partitions, exprs=exprs, pheno=pheno))
+  model.formula.cols <- row.names(attr(model.formula.terms, 'factors'))
+  
+  cleaned <-clean.phenotypes(exprs, pheno.frame, model.formula.cols)
+  exprs <- cleaned[["exprs"]]
+  pheno.frame <- cleaned[["pheno"]]
+  
+  model.cols <- prepare.pheno.model.frame(pheno.frame, model.formula.cols)
+  
+  # Cartesian Product of cofactors separates the specific sample names
+  partitions <- compute.partitions(model.cols, model.formula)
+  
+  pairs <- partition.pairs(partitions, one.vs.all = one.vs.all)
+  
+  scores <- do.t.test(exprs, partitions, pairs, one.vs.all = one.vs.all)
+  
+  # Adjust p.values and extract signficant rows
+  scores <- apply(scores, 2, p.adjust, p.adjust.method)
+  signif.comparisons <- which.significant(scores, alpha)
+  
+  signif.scores <- scores[signif.comparisons, ]
+  signif.exprs <- exprs[signif.comparisons, ]
+  means  <- do.means(signif.exprs, partitions)
+  
+  
+  
+  return(list(scores=scores[signif.comparisons,], means=means[signif.comparisons,], partitions=partitions, exprs=exprs, pheno=model.cols))
 }
 
 # Remove samples that are NA in any of the model dimensions
@@ -47,14 +69,23 @@ clean.phenotypes <- function(exprs, pheno, model.formula.cols){
 prepare.pheno.model.frame <- function(pheno, model.formula.cols){
   model.cols <- as.data.frame(pheno[, model.formula.cols])
   names(model.cols) <- model.formula.cols
-  #model.cols <- cbind(model.cols, .rownames = row.names(model.cols))
-  model.cols<-name_rows(model.cols)
+  model.cols <- name_rows(model.cols)
+  model.cols <- model.cols[order(model.cols[model.formula.cols[1]]),]
   # column vectors with the name attribute breaks dlply  
   for(i in seq_along(model.cols)){
     names(model.cols[i]) <- NULL
     attr(model.cols[i], '.Names') <- NULL
   }
   return(model.cols)
+}
+
+compute.partitions <- function(model.frame, model.formula){
+  model.formula.terms <- terms(model.formula)
+  # Specify without response variable
+  model.formula.cols <- row.names(attr(model.formula.terms, 'factors'))
+  # Cartesian Product of cofactors separates the specific sample names
+  partitions <- dlply(model.frame, model.formula.cols, function(set) set[,'.rownames'])
+  return(partitions)
 }
 
 partition.pairs <- function(partitions, one.vs.all=T){
@@ -91,7 +122,7 @@ do.t.test <- function(exprs, partitions, pairs, one.vs.all = F, statistic = F){
       exprs.subset <- exprs[,c(partitions[[pairs[1]]], partitions[[pairs[2]]])];
     }
     
-    test.stats <- rowttests(exprs.subset, as.factor(colnames(exprs.subset) %in% partitions[[pairs[1]]]))
+    test.stats <- rowttests(exprs.subset, as.factor(colnames(exprs.subset) %in% partitions[[pairs[1]]]), tstatOnly=statistic)
     if(statistic){
       return(test.stats["statistic"])
     } else{
@@ -100,7 +131,8 @@ do.t.test <- function(exprs, partitions, pairs, one.vs.all = F, statistic = F){
   },exprs,partitions)
   
   results <- do.call(cbind, results)
-  names(results) <- names(results) <- apply(pairs, 1, function(ps){paste(ps[[1]], ps[[2]], 'p.value', sep=JOIN.CHR)})
+  result.type <- ifelse(statistic, 't.score', 'p.value')
+  names(results) <- names(results) <- apply(pairs, 1, function(ps){paste(ps[[1]], ps[[2]], result.type, sep=JOIN.CHR)})
   
   return(results)
 }
@@ -120,16 +152,9 @@ do.means <- function(exprs, partitions){
 which.significant <- function(scores, alpha = 0.05){
   pairs <- names(scores)
   results <- apply(scores, 1, function(row){
-    min <- min(row)
-    # If
-    if(min < alpha){
-      cols <- which(row == min)
-      # If there are ties, this may be longer than 1. 
-      return(pairs[cols][1])
-    }
-    return(NA)
+    return(any(row < alpha))
   })
-  results <- results[!is.na(results)]
+  
   return(results)
 }
 
