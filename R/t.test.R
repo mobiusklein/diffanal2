@@ -20,6 +20,11 @@ diffanal.t.test <- function(exprs, pheno.model.frame, model.formula,
   means  <- do.mean(signif.exprs, partitions, one.vs.all=one.vs.all)
   std.devs <- do.std.dev(signif.exprs, partitions)
   fold.changes <- do.fold.change(means, pairs, fold.change.transform.fn, one.vs.all=one.vs.all)
+  if(one.vs.all){
+    complementary.means <- grepl('Not..*-mean', colnames(means))
+    means <- means[,!complementary.means]
+  }
+  
   
   results <- list(p.value=signif.scores, adj.p.value = adj.scores, 
                   fold.changes=fold.changes, means=means, std.devs=std.devs)

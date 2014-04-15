@@ -31,7 +31,7 @@ clean.samples <- function(exprs, pheno, model.formula.cols){
   return(list(exprs=exprs, pheno=pheno))
 }
 
-prepare.pheno.model.frame <- function(pheno, model.formula.cols){
+prepare.pheno.frame <- function(pheno, model.formula.cols){
   model.cols <- as.data.frame(pheno[, model.formula.cols])
   names(model.cols) <- model.formula.cols
   model.cols <- name_rows(model.cols)

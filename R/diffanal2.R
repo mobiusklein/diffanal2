@@ -18,15 +18,13 @@ SAMPLE.ID.COL <- '.rownames'
 #' @param p.adjust.method name of p value adjustment method to use. \code{"holm", "hochberg", "hommel", "bonferroni", "BH", "BY", "fdr", "none"} 
 #' @param one.vs.all 
 #'   
-diffanal2 <- function(exprs, pheno.model.frame, model.formula = NULL, predictor = NULL, confouders = list(), strategy = c('t.test'), ngenes = 250, alpha = 0.05, p.adjust.method = 'fdr', one.vs.all = F, fold.change.transform.fn = unlog){
+diffanal2 <- function(exprs, pheno.model.frame, model.formula = NULL, predictor = NULL, confouders = list(), strategy = c('t.test'), ngenes = 250, alpha = 0.05, p.adjust.method = 'fdr', one.vs.all = F, fold.change.transform.fn = unlog, unique=F){
   # Gets parameter list, for later writing to file
   args <- formals()
   args$exprs <- substitute(exprs)
   args$pheno.model.frame <- substitute(pheno.model.frame)
   args$model.formula <- substitute(model.formula)
   #print(args)
-  
-  
   
   ### 
   # Validate model specification 
@@ -53,23 +51,25 @@ diffanal2 <- function(exprs, pheno.model.frame, model.formula = NULL, predictor 
   exprs <- cleaned[["exprs"]]
   pheno.model.frame <- cleaned[["pheno"]]
   
-  pheno.model.frame <- prepare.pheno.model.frame(pheno.model.frame, model.formula.cols)
+  pheno.model.frame <- prepare.pheno.frame(pheno.model.frame, model.formula.cols)
   
   results <- NULL
   if(strategy == 't.test'){
-    results <- diffanal.t.test(exprs, pheno.model.frame, model.formula, ngenes, alpha, 
-                              p.adjust.method, one.vs.all, fold.change.transform.fn)
+    results <- diffanal.t.test(exprs=exprs, pheno.model.frame=pheno.model.frame, 
+                               model.formula=model.formula, alpha=alpha, 
+                               p.adjust.method=p.adjust.method, one.vs.all=one.vs.all, 
+                               fold.change.transform.fn=fold.change.transform.fn)
   }
   
   results.table <- do.call(cbind, results)
-  colnames(results.table) <- unlist(lapply(results, colnames))
-  results.table <- as.data.table(results.table)
-}
-
-do.limma.lmFit <- function(exprs, pheno, model.formula, ngenes=250, alpha){
-  design <- model.matrix(model.formula, pheno)
-  fit <- lmFit(exprs, design)
-  fit.ebayes <- eBayes(fit)
-  #fit.top <- topTable(fit.ebayes, number=ngenes)
-  return(fit.ebayes)
+  # Include probe names in a separate column as row.names are not preserved by all operations
+  results.table <- cbind(row.names(results.table), results.table)
+  colnames(results.table) <- c("Probe", unlist(lapply(results, colnames)))
+  # Sort by the first p.value column. This may not be general enough
+  results.table <- results.table[order(results.table[,2]),]
+  results.table <- results.table[1:ngenes,]
+  results.table <- diffanal.results.table(results.table, ngenes=ngenes, 
+                                        unique=unique, column.classes=lapply(results, colnames),
+                                        call=args)
+  return(results.table)
 }
