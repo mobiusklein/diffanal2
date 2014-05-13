@@ -1,8 +1,6 @@
-#' @import RJSONIO
-
-#' @title diffanal Results Table
+#' @title \code{diffanal} Results Table
 #' 
-#' Simple wrapper on top of \code{data.frame}.
+#' @description A simple wrapper on top of \code{data.frame} that bundles columns into groups
 #' 
 #' @param obj A data.frame or data.table object
 #' @param ngenes A record of the ngenes parameter from the call. \code{attr}
@@ -10,7 +8,7 @@
 #' @param column.groups A list of the different subclasses of columns. \code{list("p.value", "adj.p.value", "fold.changes", "means", "std.devs")}. \code{attr}
 #' @param call A symbolic record of the call parameters. Useful for merging and writing reports. \code{attr}
 #' @export
-diffanal.results.table <- function(obj, ngenes, unique, column.groups, call = NULL){
+diffanal.results.table <- function(obj, ngenes = Inf, unique = F, column.groups, call = NULL){
     
   # Attach S3 class descriptor
   class(obj) <- c('diffanal.results', class(obj))
@@ -26,12 +24,14 @@ diffanal.results.table <- function(obj, ngenes, unique, column.groups, call = NU
 
 NON.CLASS.COLS <- list("F.stat", "description", "gene")
 
+#' @title column.groups
+#' @param x An R Object
 #' @export
 `column.groups` <- function(x){
   UseMethod('column.groups', x)
 }
 
-#' @export
+#' @S3method column.groups diffanal.results
 `column.groups.diffanal.results` <- function(x){
   return(attr(x, 'column.groups'))
 }
@@ -69,8 +69,10 @@ as.data.frame.diffanal.results <- function(x, row.names=NULL, ...){
   return(obj)
 }
 
+#' @S3method unique diffanal.results
+#' @method unique diffanal.results
 #' @export
-as.unique <- function(obj, criteria.column="p.value", score.fn = which.min){
+unique.diffanal.results <- function(obj, criteria.column="p.value", score.fn = which.min){
   if(!("diffanal.results" %in% class(obj))) stop("Object must be of type `diffanal.results`")  
   if(!(criteria.column %in% names(column.groups(obj)))) stop(paste("Criteria Column", criteria.column ,"not found in", do.call(paste, as.list(c("[", names(column.groups(obj)), "]")))))
   if(attr(obj, 'unique')){
@@ -106,7 +108,7 @@ as.unique <- function(obj, criteria.column="p.value", score.fn = which.min){
   return(unique.table)
 }
 
-
+# @importFrom RJSONIO toJSON
 as.json <- function(table, ...){
   json.obj <- list()
   json.obj$columns.groups <- (column.groups(table))
@@ -121,10 +123,36 @@ to.html <- function(table, ...){
     
 }
 
+#' Perform row-wise comparison between a data.frame or matrix and a single vector
+#' 
+#' @param df A data.frame or matrix
+#' @param match A vector that shares columns with \code{df}
+#' @param cols Optionally, a character vector naming which columns to compare between \code{df} and \code{match}
+row.eq <- function(df, match, cols){
+  # Restrict to comparing only specific columns
+  if(!is.null(cols)){
+    df <- as.data.frame(df[,cols])
+    match <- match[cols]
+  }
+  # row-wise compare to match
+  apply(df, 1, function(row){
+    all(row == match)
+  })
+}
 
-sort.table <- function(table, columns, ngenes = 250){
+
+#' @name  sort.diffanal.results
+#' @title sort.diffanal.results
+#' @description  Given an unordered results table, order it by the column group given, and report the top ngenes given in each column of the given column group
+#' @param table A data.frame
+#' @param column.grp A set of columns from \code{table} or a data.frame that is parallel to it.
+#' @param ngenes The number of genes to return for each class.
+#' @S3method sort diffanal.results
+#' @method sort diffanal.results
+#' @export
+sort.diffanal.results <- function(table, column.grp, ngenes = 250){
   
-  sorts <- lapply(columns, function(column){
+  sorts <- lapply(column.grp, function(column){
     order(table[,column])
   })
   
@@ -140,4 +168,32 @@ sort.table <- function(table, columns, ngenes = 250){
   
   table <- table[unlist(top.genes),]
   return(table)
+}
+
+
+#' @title which.significant
+#' @description Determine which rows of a data.frame of p-values contain a significant score.
+#' @param scores A data.frame or matrix of p.values
+#' @param alpha p-value threshold for significance
+#' @return A boolean vector labeling each row in \code{scores} as significant or not
+#' @export
+which.significant <- function(scores, alpha = 0.05){
+  results <- apply(scores, 1, function(row){
+    return(any(row < alpha))
+  })
+  return(results)
+}
+
+#' @title which.class.significant
+#' @description Determine which rows of a data.frame of p-values contain a significant score, and which column the minimum score was found in. 
+#' @param scores A data.frame or matrix of p.values
+#' @param alpha p-value threshold for significance
+#' @return A vector labeling each row in scores for which column is significant
+which.class.significant <- function(scores, alpha){
+  results <- apply(scores, 1, function(row){
+    if(any(row < alpha)){
+      return(which.min(row))
+    }
+  })
+  return(results)
 }

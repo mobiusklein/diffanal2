@@ -11,8 +11,7 @@ Depends:
     genefilter,
     limma,
     plyr,
-    doMC,
-    RJSONIO
+    doMC
 License: What license is it under?
 Collate:
     'diffanal2.R'

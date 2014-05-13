@@ -5,8 +5,8 @@ library(limma)
 
 #' diffanal.limma.test
 diffanal.limma.test <- function(exprs, pheno.model.frame, model.formula, 
-         alpha = 0.05, p.adjust.method = 'fdr', one.vs.all = F, robust = F,
-         ngenes = 250, summary.transform = unlog){
+         p.adjust.method = 'fdr', one.vs.all = F, robust = F,
+         ngenes = 250, summary.transform = unlog, ...){
 
   # Ensure there is no intercept term in the design matrix
   model.formula <- adjust.formula(model.formula)
@@ -56,12 +56,6 @@ diffanal.limma.test <- function(exprs, pheno.model.frame, model.formula,
   # Separately compute the adjusted score here because decideTests does not return
   # the adjusted p.value computed.
   adj.scores <- apply(fit.ebayes$p.value, 2, p.adjust, p.adjust.method)
-  decisions <- decideTests(fit.ebayes, adjust.method=p.adjust.method, p.value=alpha)
-  signif.scores <- apply(decisions, 1, function(row)any(row != 0))
-  
-  signif.fit <- fit.ebayes[signif.scores,]
-  restrict.fit <- restrict.fit[signif.scores,]
-  adj.scores <- adj.scores[signif.scores,]
 
   means <- summary.transform(restrict.fit$coefficients)
   colnames(means) <- paste(colnames(means), 'mean', sep=JOIN.CHR)
@@ -74,7 +68,7 @@ diffanal.limma.test <- function(exprs, pheno.model.frame, model.formula,
     # Construct the complementary design matrix with the "not" classes
     complement.design <- make.complement.design(design,                                                                   predictor.col.names)
     # Fit the "Not" model
-    complement.fit <- lmFit(exprs[signif.scores,], complement.design)
+    complement.fit <- lmFit(exprs, complement.design)
     
     # Extract summary statistics
     comp.means <- summary.transform(complement.fit$coefficients)  
@@ -86,51 +80,34 @@ diffanal.limma.test <- function(exprs, pheno.model.frame, model.formula,
     std.devs <- cbind(std.devs, comp.std.devs)
   }
                         
-  colnames(signif.fit$p.value) <- paste(fix.dash.names(condition.names, 
-                                                       colnames(signif.fit$p.value)), 
+  colnames(fit.ebayes$p.value) <- paste(fix.dash.names(condition.names, 
+                                                       colnames(fit.ebayes$p.value)), 
                                         'p.value', sep=JOIN.CHR)
   colnames(adj.scores) <- paste(fix.dash.names(condition.names, 
-                                               colnames(signif.fit$p.value)), 
+                                               colnames(fit.ebayes$p.value)), 
                                 'adj.p.value', sep=JOIN.CHR)
-  colnames(signif.fit$lods) <- paste(fix.dash.names(condition.names, 
-                                                    colnames(signif.fit$lods)), 
+  colnames(fit.ebayes$lods) <- paste(fix.dash.names(condition.names, 
+                                                    colnames(fit.ebayes$lods)), 
                                      "lods", sep=JOIN.CHR)
   
-  colnames(signif.fit$t) <- paste(fix.dash.names(condition.names, colnames(signif.fit$t)), 
+  colnames(fit.ebayes$t) <- paste(fix.dash.names(condition.names, colnames(fit.ebayes$t)), 
                                   't.score', sep=JOIN.CHR)
   
-  #fold.changes <- do.fold.change(means, pairs)
-  print(str(means))
   results <- do.summaries(summary.transform(exprs), partitions, pairs, one.vs.all, 
                           means = means, std.devs=std.devs)
   
-  results <- c(list(gene = row.names(signif.fit), 
-                  p.value=signif.fit$p.value, adj.p.value = adj.scores, 
-                  lods=signif.fit$lods, t.score=signif.fit$t),
-#                   fold.changes=fold.changes, means=means, 
-#                   std.devs=std.devs
+  results <- c(list(gene = row.names(fit.ebayes), 
+                  p.value=fit.ebayes$p.value, adj.p.value = adj.scores, 
+                  lods=fit.ebayes$lods, t.score=fit.ebayes$t),
                   results, 
-                  F.stat = list(data.frame(F.score=signif.fit$F, 
-                                           F.p.value=signif.fit$F.p.value)))
+                  F.stat = list(data.frame(F.score=fit.ebayes$F, 
+                                           F.p.value=fit.ebayes$F.p.value)))
   
   results.table <- do.call(cbind, results)
-  #name.data <- simplify.names(get.predictor(model.formula), )
   colnames(results.table) <- c("gene", c(unlist(lapply(results, colnames))))
     
-  # Collate genes by p.value (ascending) for each class
-  sorts <- lapply(colnames(results$p.value), function(column){
-    order(results.table[,column])
-  })
-    
-  # Merge the assembled gene list, retaining @ngenes from each set. At most the set will
-  # contain number of comparisons
-  top.genes <- Reduce(function(a, b){
-    a <- unlist(a)
-    b <- unlist(b)
-    return(union(a, b[1:ngenes]))
-  }, sorts[-1], sorts[[1]][1:ngenes])
-  
-  results.table <- results.table[unlist(top.genes),]
+  # Collate genes by adj.p.value (ascending) for each class
+  results.table <- sort.diffanal.results(results.table, colnames(results$adj.p.value), ngenes)
   results.table <- results.table[!is.na(results.table[,1]),]
   
   results.table <- diffanal.results.table(results.table, ngenes=ngenes, 

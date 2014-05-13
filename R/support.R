@@ -13,7 +13,7 @@ verbose <- function(...){
   opt <- getOption("verbose", F) || getOption(".diffanal.verbose", F)
   if(!opt) invisible(NULL)
   msgs <- list(...)
-  msgs <- do.call(paste, msgs)
+  msgs <- do.call(paste, c(msgs, '\n'))
   cat(msgs)
 }
 
@@ -21,7 +21,8 @@ verbose <- function(...){
 formula.from.list <- function(predictor, confounders = list()){
   # Attach the predictor and tilde first
   relation <- paste("~", predictor)
-  # Combine any confounders into a chain of additions 
+  # Combine any confounders into a chain of additions
+  verbose("Confounders: ", confounders)
   trailing.terms <- do.call(paste, c(confounders, sep = " + "))
   # If there are trailing terms to merge
   if(length(trailing.terms) > 0){
@@ -76,6 +77,8 @@ clean.samples <- function(exprs, pheno, model.formula.cols){
 }
 
 #' Cleans up the pheno.model.frame
+#' @param pheno A data.frame containing predictor and confounder labels for each sample
+#' @param model.formula.cols A vector of strings that label which columns from \code{pheno} to keep
 prepare.pheno.frame <- function(pheno, model.formula.cols){
   model.cols <- as.data.frame(pheno[, model.formula.cols])
   names(model.cols) <- model.formula.cols
@@ -89,11 +92,14 @@ prepare.pheno.frame <- function(pheno, model.formula.cols){
   return(model.cols)
 }
 
-compute.partitions <- function(model.frame, model.formula){
+#' Create a class to sample name mapping from the model.frame.
+#' @param pheno.model.frame A data.frame containing predictor and confounder labels for each sample
+#' @param model.formula A formula describing the predictor and confounder labels
+compute.partitions <- function(pheno.model.frame, model.formula){
   if(is.formula(model.formula)) model.formula.cols <- get.model.formula.terms(model.formula)
   else model.formula.cols <- model.formula
   # Cartesian Product of cofactors separates the specific sample names
-  partitions <- dlply(model.frame, model.formula.cols, function(set) set[,'.rownames'])
+  partitions <- dlply(pheno.model.frame, model.formula.cols, function(set) set[,'.rownames'])
   return(partitions)
 }
 
@@ -129,6 +135,8 @@ compute.partition.pairs <- function(partitions, one.vs.all=F){
   pairs <- t(combn(names(partitions),2))
   return(pairs)
 }
+
+
 
 #' Standard function for computing mean expression levels from the expression matrix
 #' 
@@ -190,7 +198,7 @@ do.std.dev <- function(exprs, partitions, one.vs.all){
 #' Compute the fold-change (mean ratio) between each pair of conditions.
 #' 
 #' @param means The output data.frame from \code{do.means}
-#' @export
+#' @param pairs A data.frame of non-redundant partition name pairs to compare
 do.fold.change <- function(means, pairs){
   # Adds the suffix to each group name to match the equivalent mean
   # column in the means frame
@@ -258,6 +266,14 @@ rowMads <- function(exprs, centers = NULL, constant = 1.4826, na.rm = F, low = F
 }
 
 #' Compute the mad for each gene in each partition.
+#' @param exprs A numeric matrix of gene expression data
+#' @param medians The median for each row in exprs in each partition
+#' @param partitions The set of self-contained conditions to sample id mappings
+#' @param one.vs.all Boolean whether to compute complementary group statistics
+#' @param constant see \code{stats::mad}
+#' @param low see \code{stats::mad} 
+#' @param high see \code{stats::mad}
+#' @seealso \code{stats::mad}
 do.mad <- function(exprs, medians, partitions, one.vs.all, constant=1.4826, low=F, high=F){
   results <- lapply(names(partitions), function(part.name){
     exprs.subset <- exprs[,partitions[[part.name]]];
@@ -284,25 +300,8 @@ do.mad <- function(exprs, medians, partitions, one.vs.all, constant=1.4826, low=
   return(results)
 }
 
-#' Perform row-wise comparison between a data.frame or matrix and a single vector
-#' 
-#' @param df A data.frame or matrix
-#' @param match A vector that shares columns with \code{df}
-#' @param cols Optionally, a character vector naming which columns to compare between \code{df} and \code{match}
-row.eq <- function(df, match, cols){
-  # Restrict to comparing only specific columns
-  if(!is.null(cols)){
-    df <- as.data.frame(df[,cols])
-    match <- match[cols]
-  }
-  # row-wise compare to match
-  apply(df, 1, function(row){
-    all(row == match)
-  })
-}
-
-#' Computes the mean and standard deviation of the predictor's influence
-#' on each gene. Computes a separate value for each level of the predictor.
+# Computes the mean and standard deviation of the predictor's influence
+# on each gene. Computes a separate value for each level of the predictor.
 do.lm <- function(exprs, pheno.frame, model.formula, one.vs.all = F){
   data <- cbind(exprs[1,],pheno.frame)
   names(data) <- c('..data..', names(pheno.frame))
@@ -316,9 +315,13 @@ do.lm <- function(exprs, pheno.frame, model.formula, one.vs.all = F){
 }
 
 #' Computes F-score and significance of F-score
+#' @param exprs A numeric matrix of gene expression data
+#' @param pheno.frame A data.frame containing predictor and confounder labels for each sample
+#' @param model.formula A formula object defining the predictor and confounder labels
 do.aov <- function(exprs, pheno.frame, model.formula){
+  verbose("Computing F statistic for entire model")
   model.formula <- adjust.formula(model.formula)
-  results <- alply(exprs, 1, function(row){
+  time <- system.time(results <- alply(exprs, 1, function(row){
     data <- cbind(row,pheno.frame)
     names(data) <- c('..data..', names(pheno.frame))
     data.formula <- as.formula(paste(c('..data..', as.character(model.formula)), 
@@ -327,34 +330,28 @@ do.aov <- function(exprs, pheno.frame, model.formula){
     F.score <- res[7]
     F.p.value <- res[9]
     return(c(F.score, F.p.value))
-  })
+  }))
+  print(time)
   results <- as.data.frame(do.call(rbind, results))
   row.names(results) <- row.names(exprs)
   colnames(results) <- c("F.score", "F.p.value")
   return(results)
 }
 
-#' Get only significant rows of a frame of p.values
-which.significant <- function(scores, alpha = 0.05){
-  results <- apply(scores, 1, function(row){
-    return(any(row < alpha))
-  })
-  return(results)
-}
-
-#' Get which column of is most significant for each row 
-#' in a frame of p.values
-which.class.significant <- function(scores, alpha){
-  results <- apply(scores, 1, function(row){
-    if(any(row < alpha)){
-      return(which.min(row))
-    }
-  })
-  return(results)
-}
-
-#' Calculate all summary statistics 
+#' Calculate all summary statistics
+#' @param exprs A numeric matrix of gene expression data
+#' @param partitions The set of self-contained conditions to sample id mappings
+#' @param pairs A non-redundant pairing of partitions to compare
+#' @param one.vs.all Boolean flag, indicating whether to compute complementary class statistics
+#' @param means A data.frame containing the mean for each gene for each partition. Optional
+#' @param std.devs A data.frame containing the standard deviation for each gene for each partition. Optional
+#' @param medians A data.frame containing the median for each gene for each partition. Optional
+#' @param mads A data.frame containing the mad for each gene for each partition. Optional
+#' @param fold.changes A data.frame containing the fold change for each gene for each partition pair. Optional
+#' @param parallel Boolean flag, indicating whether to try to use the registered parallel backend
+#' @return A \code{list} of \code{data.frame}s, one for each summary statistic group computed.
 do.summaries <- function(exprs, partitions, pairs, one.vs.all, means=NULL, std.devs=NULL, medians=NULL, mads=NULL, fold.changes = NULL, parallel=F,...){
+  verbose("Calculating summary statistics")
   results <- list()
   summaries <- list()
   
@@ -389,7 +386,6 @@ do.summaries <- function(exprs, partitions, pairs, one.vs.all, means=NULL, std.d
   # Check each second order summary statistic
   if(is.null(fold.changes)){
     summaries <- c(summaries, fold.changes=function(exprs, partitions, pairs, within.summaries, one.vs.all){
-      print(str(within.summaries[['means']]))
       return(do.fold.change(within.summaries[['means']], pairs))
     })
   } else {
