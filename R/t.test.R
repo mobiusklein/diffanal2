@@ -47,7 +47,7 @@ diffanal.t.test <- function(exprs, pheno.model.frame, model.formula,
   colnames(results.table) <- c("gene", unlist(lapply(results, colnames)))
   
   results.table <- sort.diffanal.results(results.table, colnames(results$adj.p.value))
-  results.table <- diffanal.results.table(results.table, ngenes=ngenes, 
+  results.table <- diffanal.results(results.table, ngenes=ngenes, 
                                           unique=unique, column.groups=lapply(results, colnames))
   return(results.table)
 }

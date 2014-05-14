@@ -381,7 +381,7 @@ diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs
   results.table <- cbind(gene = row.names(results.table), results.table)
   
   results.table <- sort.diffanal.results(results.table, colnames(results$adj.perm.p.values), ngenes)
-  results.table <- diffanal.results.table(results.table, ngenes=ngenes, unique=F, column.groups=lapply(results, colnames))
+  results.table <- diffanal.results(results.table, ngenes=ngenes, unique=F, column.groups=lapply(results, colnames))
   
   return(results.table)
 }

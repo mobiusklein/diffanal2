@@ -100,7 +100,7 @@ diffanal.limma.test <- function(exprs, pheno.model.frame, model.formula,
                   p.value=fit.ebayes$p.value, adj.p.value = adj.scores, 
                   lods=fit.ebayes$lods, t.score=fit.ebayes$t),
                   results, 
-                  F.stat = list(data.frame(F.score=fit.ebayes$F, 
+                  F.stats = list(data.frame(F.score=fit.ebayes$F, 
                                            F.p.value=fit.ebayes$F.p.value)))
   
   results.table <- do.call(cbind, results)
@@ -110,7 +110,7 @@ diffanal.limma.test <- function(exprs, pheno.model.frame, model.formula,
   results.table <- sort.diffanal.results(results.table, colnames(results$adj.p.value), ngenes)
   results.table <- results.table[!is.na(results.table[,1]),]
   
-  results.table <- diffanal.results.table(results.table, ngenes=ngenes, 
+  results.table <- diffanal.results(results.table, ngenes=ngenes, 
                                           unique=F, 
                                           # gene is not a group
                                           column.groups=lapply(results[-1], colnames))
