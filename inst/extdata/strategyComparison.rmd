@@ -1,0 +1,315 @@
+```{r setup, echo=FALSE}
+opts_chunk$set(fig.align = 'center', echo = F)
+require(devtools)
+require(ggplot2)
+require(reshape2)
+require(diffanal2)
+data(lymphoma.2010)
+```
+## Exploring diffanal2 results
+
+I ran `diffanal2` using the data from `lymphoma2010.frma.ensg`, using `t.test`, `limma`, and two seeds, 1 & 123, for `perm.t` under a one-vs-all design over the meta.1 phenotype field. 
+
+```{r load-data,  cache=F}
+x.limma  <- readRDS("lymphoma.limma.rds")
+x.t.test <- readRDS("lymphoma.t.rds")
+x.perm.1 <- readRDS("perm.test-1.rds")
+x.perm.2 <- readRDS("perm.test-2.rds")
+```
+
+I selected classes for each gene based on the FDR, using the permutation FDR for the permutation tests. I wanted to concentrate on OxPhos, so I limited my search to only genes which were strongest associated with `OxPhos..Not.OxPhos` class.
+
+```{r subset-tables, cache=T}
+unique.limma <- unique(x.limma)
+unique.t.test <- unique(x.t.test)
+unique.perm.1 <- unique(x.perm.1, "adj.perm.p.values")
+unique.perm.2 <- unique(x.perm.2, "adj.perm.p.values")
+
+oxphos.limma <- unique.limma[unique.limma$class == "OxPhos..Not.OxPhos",]
+oxphos.t.test <- unique.t.test[unique.t.test$class == "OxPhos..Not.OxPhos",]
+oxphos.perm.1 <- unique.perm.1[unique.perm.1$class == "OxPhos..Not.OxPhos",]
+oxphos.perm.2 <- unique.perm.2[unique.perm.2$class == "OxPhos..Not.OxPhos",]
+```
+
+### Comparing Gene Rankings Between Strategies
+
+I took t-scores from each filtered result table and compared them pairwise. 
+
+```{r extract-t-score, cache=T}
+ox.limma.ts <- oxphos.limma$class..t.score
+names(ox.limma.ts) <- row.names(oxphos.limma)
+
+ox.t.test.ts <- oxphos.t.test$class..t.score
+names(ox.t.test.ts) <- row.names(oxphos.t.test)
+
+ox.perm.1.ts <- oxphos.perm.1$class..max.t.score
+names(ox.perm.1.ts) <- row.names(oxphos.perm.1)
+
+ox.perm.2.ts <- oxphos.perm.2$class..max.t.score
+names(ox.perm.2.ts) <- row.names(oxphos.perm.2)
+```
+
+```{r t-vs-limma, cache=F}
+inter <- intersect(names(ox.t.test.ts), names(ox.limma.ts))
+cmpr <- data.frame(t.test = ox.t.test.ts[inter], limma = ox.limma.ts[inter])
+ggplot(cmpr, aes(x = limma, y = t.test)) + geom_point() + labs(title="t-score comparison between\n limma and t.test")
+
+cmpr <- data.frame(t.test = oxphos.t.test[inter, "class..mean"], limma= oxphos.limma[inter, "class..mean"])
+coefs.all <- coef(lm(t.test ~ limma, data = cmpr))
+coefs.tail <- coef(lm(t.test ~ limma, data = head(cmpr, n=50)))
+ggplot(cmpr, aes(x = t.test, y = limma )) + geom_point() + labs(title="Mean comparison between\n t-test and limma") + geom_abline(aes(alpha=0.5, color="red")) + geom_abline(aes(alpha=0.5, color="blue"), intercept = coefs.all[1], slope = coefs.all[2]) + geom_abline(aes(alpha=0.5, color="green"), intercept = coefs.tail[1], slope = coefs.tail[2])
+cat("Red Line:\n(Intercept)\tSlope\n\t0\t1")
+cat("Blue Line:")
+print(coefs.all)
+cat("Green Line:")
+print(coefs.tail)
+
+cmpr <- data.frame(t.test = oxphos.t.test[inter, "class..fold.change"], limma= oxphos.limma[inter, "class..fold.change"])
+ggplot(cmpr, aes(x = t.test, y = limma )) + geom_point() + labs(title="Fold Change comparison between\n t-test and limma") + geom_abline(aes(alpha=0.5, color="red"))
+```
+
+```{r perm.1-vs-perm.2, cache=T}
+inter <- intersect(names(ox.perm.1.ts), names(ox.perm.2.ts))
+cmpr <- data.frame(perm.1 = ox.perm.1.ts[inter], perm.2 = ox.perm.2.ts[inter])
+ggplot(cmpr, aes(x = perm.1, y = perm.2)) + geom_point() + labs(title="t-score comparison between\n different permutation seeds")
+```
+
+```{r t-vs-perm.1, cache=T}
+inter <- intersect(names(ox.perm.1.ts), names(ox.t.test.ts))
+cmpr <- data.frame(perm.1 = ox.perm.1.ts[inter], t.test = ox.t.test.ts[inter])
+ggplot(cmpr, aes(x = perm.1, y = t.test)) + geom_point() + labs(title="t-score comparison between\n t-test and permutation t-test 1")
+```
+
+```{r t-vs-perm.2, cache=T}
+inter <- intersect(names(ox.perm.2.ts), names(ox.t.test.ts))
+cmpr <- data.frame(perm.2 = ox.perm.2.ts[inter], t.test = ox.t.test.ts[inter])
+ggplot(cmpr, aes(x = perm.2, y = t.test)) + geom_point() + labs(title="t-score comparison between\n t-test and permutation t-test 2")
+```
+
+```{r perm.1-vs-limma, cache=T}
+inter <- intersect(names(ox.perm.1.ts), names(ox.limma.ts))
+cmpr <- data.frame(perm.1 = ox.perm.1.ts[inter], limma = ox.limma.ts[inter])
+
+ggplot(cmpr, aes(x = perm.1, y = limma)) + geom_point() + labs(title="t-score comparison between\n permutation t-test 1 and limma")
+```
+
+
+
+### Gene Selection
+
+Selecting genes to explore next, I took arbitrary thresholds of each result table to get around 1000 genes from each and plotted a venndiagram of the overlap.
+
+```{r signif-intersect, cache=F}
+ox.adj.p.limma <- oxphos.limma$class..adj.p.value
+names(ox.adj.p.limma) <- row.names(oxphos.limma)
+ox.adj.p.limma <- ox.adj.p.limma[oxphos.limma$class..adj.p.value < 0.1]
+
+ox.adj.p.t <- oxphos.t.test$class..adj.p.value
+names(ox.adj.p.t) <- row.names(oxphos.t.test)
+ox.adj.p.t <- ox.adj.p.t[oxphos.t.test$class..adj.p.value < 1e-5]
+
+ox.adj.perm.1 <- oxphos.perm.1$class..adj.perm.p.value
+names(ox.adj.perm.1) <- row.names(oxphos.perm.1)
+ox.adj.perm.1 <- ox.adj.perm.1[oxphos.perm.1$class..adj.perm.p.value < .0026]
+
+ox.adj.perm.2 <- oxphos.perm.2$class..adj.perm.p.value
+names(ox.adj.perm.2) <- row.names(oxphos.perm.2)
+ox.adj.perm.2 <- ox.adj.perm.2[oxphos.perm.2$class..adj.perm.p.value < .0026]
+
+all.genes <- Reduce(union, 
+       lapply(list(ox.adj.p.limma, ox.adj.p.t, ox.adj.perm.1, ox.adj.perm.2), names),
+       c()
+       )
+
+inter <- t(laply(list(ox.adj.p.limma, ox.adj.p.t, ox.adj.perm.1, ox.adj.perm.2), 
+                 function(x, all.genes){ all.genes %in% names(x) }, all.genes))
+colnames(inter) <- c("limma", "t.test", "perm.1", "perm.2")
+
+counts <- vennCounts(inter)
+
+vennDiagram(counts, main='Overlap of Significance between Tests')
+```
+
+```{r gene-selection, cache=F}
+
+# Capture all genes significant in limma, but only take their inclusion
+# in the other three tests
+limma.selected <- (inter[inter[,1],2:4])
+row.names(limma.selected) <- all.genes[inter[,1]]
+selected.in.others <- sort(rowSums(limma.selected), decreasing=T)
+selected.in.others <- selected.in.others[selected.in.others > 0]
+
+selected.genes <- names(selected.in.others)
+```
+As expected, there are only `r counts[16,5]` genes that are suggested by all four tests. In order to get a better number of genes to try, I took all genes that were suggested by `limma` and at least one other test, resulting in a set of `r length(selected.in.others)` genes.
+
+```{r building-plot, cache=F, fig.height=9,fig.width=9}
+
+selected.gene.scores <- oxphos.limma[selected.genes,"class..t.score"]
+names(selected.gene.scores) <- selected.genes
+ordered.gene.scores <- sort(selected.gene.scores)
+
+lymphoma.oxphos <- lymphoma[,names(sort(lymphoma$meta.1, decreasing=T))]
+
+gene.data <- exprs(lymphoma.oxphos[names(ordered.gene.scores),])
+
+cls.oxphos = pData(lymphoma.oxphos)$meta.1
+
+col.side.color <- as.matrix(cls.oxphos)
+col.side.color[col.side.color == "OxPhos"] <- "red"
+col.side.color[col.side.color == "BCR"] <- "blue"
+col.side.color[col.side.color == "HR"] <- "green"
+
+row.color.space <- colorRamp(c("red", "blue"), space="rgb")
+max.score <- max(abs(ordered.gene.scores))
+row.side.colors <- sapply(ordered.gene.scores, function(x){
+   rgb.tuple <- row.color.space(abs(x)/max.score)
+   rgb(rgb.tuple[1]/255, rgb.tuple[2]/255, rgb.tuple[3]/255, 1)
+})
+
+row.side.colors <- (as.matrix(row.side.colors))
+
+body.color.palette <- colorRampPalette(c("red", "white", "blue"))(100)
+
+heatmap(gene.data, Rowv = ordered.gene.scores, Colv = cls.oxphos, ColSideColors=col.side.color, RowSideColors= row.side.colors, col = body.color.palette, main = "Selecting Genes by FDR")
+```
+Genes are sorted by ascending `t-score`, <span style='color:red'>OxPhos</span>, <span style='color:green'>HR</span>, <span style='color:blue'>BCR</span>
+
+There is clearly *some* segregation in the gene expression between OxPhos and Not OxPhos, but the difference isn't night and day. There is some group mixing, but the majority of the OxPhos samples clustered together, while the other two classes mixed freely. If I didn't take the intersection, I would have `r length(row.names(limma.selected))` genes and the heatmap would be:
+```{r heatmap-without-intersection, cache=F, fig.height=9,fig.width=9}
+selected.gene.scores.2 <- oxphos.limma[row.names(limma.selected), "class..t.score"]
+names(selected.gene.scores.2) <- row.names(limma.selected)
+ordered.gene.scores.2 <- sort(selected.gene.scores.2)
+
+gene.data.2 <- exprs(lymphoma.oxphos[names(ordered.gene.scores.2),])
+
+max.score.2 <- max(abs(ordered.gene.scores.2))
+row.side.colors.2 <- sapply(ordered.gene.scores.2, function(x){
+   rgb.tuple <- row.color.space(abs(x)/max.score.2)
+   rgb(rgb.tuple[1]/255, rgb.tuple[2]/255, rgb.tuple[3]/255, 1)
+})
+
+row.side.colors.2 <- (as.matrix(row.side.colors.2))
+
+heatmap(gene.data.2, Rowv = ordered.gene.scores.2, Colv = cls.oxphos, ColSideColors=col.side.color, RowSideColors= row.side.colors.2, col = body.color.palette, main = "Selecting Genes by FDR (Without Intersection)")
+```
+
+This map doesn't show very good separation either. Rather than fiddling to try to drop, the right gene to make the grouping tighter, a different selection criterion might be more interesting. 
+
+If I instead selected only genes that showed over-expression (`abs(1 - fold change)` > .2), my venndiagram would be
+```{r fold-change-intersection}
+ox.fc.limma <- oxphos.limma$class..fold.change
+names(ox.fc.limma) <- row.names(oxphos.limma)
+ox.fc.limma <- ox.fc.limma[abs(1 - oxphos.limma$class..fold.change) > .3]
+
+ox.fc.t <- oxphos.t.test$class..fold.change
+names(ox.fc.t) <- row.names(oxphos.t.test)
+ox.fc.t <- ox.fc.t[abs(1 - oxphos.t.test$class..fold.change) > .3]
+
+ox.fc.perm.1 <- oxphos.perm.1$class..fold.change
+names(ox.fc.perm.1) <- row.names(oxphos.perm.1)
+ox.fc.perm.1 <- ox.fc.perm.1[abs(1 - oxphos.perm.1$class..fold.change) > .3]
+
+ox.fc.perm.2 <- oxphos.perm.2$class..fold.change
+names(ox.fc.perm.2) <- row.names(oxphos.perm.2)
+ox.fc.perm.2 <- ox.fc.perm.2[abs(1 - oxphos.perm.2$class..fold.change) > .3]
+
+all.genes.fc <- Reduce(union, 
+       lapply(list(ox.fc.limma, ox.fc.t, ox.fc.perm.1, ox.fc.perm.2), names),
+       c()
+       )
+
+inter <- t(laply(list(ox.fc.limma, ox.fc.t, ox.fc.perm.1, ox.fc.perm.2), 
+                 function(x, all.genes.fc){ all.genes.fc %in% names(x) }, all.genes.fc))
+colnames(inter) <- c("limma", "t.test", "perm.1", "perm.2")
+
+counts <- vennCounts(inter)
+
+vennDiagram(counts, main='Overlap of Overexpresion Prediction between Tests')
+```
+
+```{r gene-selection-fold-change}
+limma.selected <- (inter[inter[,1],2:4])
+row.names(limma.selected) <- all.genes.fc[inter[,1]]
+selected.in.others <- sort(rowSums(limma.selected), decreasing=T)
+selected.in.others <- selected.in.others[selected.in.others > 0]
+
+selected.genes <- names(selected.in.others)
+```
+
+with only `r length(selected.genes)` genes for use.
+
+```{r build-plot-fold-change}
+selected.gene.scores <- oxphos.limma[selected.genes,"class..fold.change"]
+names(selected.gene.scores) <- selected.genes
+ordered.gene.scores <- sort(selected.gene.scores)
+
+gene.data <- exprs(lymphoma.oxphos[names(ordered.gene.scores),])
+
+max.score <- max(abs(ordered.gene.scores))
+row.side.colors <- sapply(ordered.gene.scores, function(x){
+   rgb.tuple <- row.color.space(abs(x)/max.score)
+   rgb(rgb.tuple[1]/255, rgb.tuple[2]/255, rgb.tuple[3]/255, 1)
+})
+
+row.side.colors <- (as.matrix(row.side.colors))
+
+heatmap(gene.data, Rowv = ordered.gene.scores, Colv = cls.oxphos, ColSideColors=col.side.color, RowSideColors= row.side.colors, col = body.color.palette, main = "Selecting Genes by Fold Change")
+
+```
+
+If I instead built off of what the plain t-test suggested,
+```{r}
+t.selected <- (inter[inter[,2],c(1,3,4)])
+row.names(t.selected) <- all.genes.fc[inter[,2]]
+selected.in.others <- sort(rowSums(t.selected), decreasing=T)
+selected.in.others <- selected.in.others[selected.in.others > 0]
+
+selected.genes <- names(selected.in.others)
+selected.gene.scores <- oxphos.t.test[selected.genes,"class..fold.change"]
+names(selected.gene.scores) <- selected.genes
+ordered.gene.scores <- sort(selected.gene.scores)
+
+gene.data <- exprs(lymphoma.oxphos[names(ordered.gene.scores),])
+
+max.score <- max(abs(ordered.gene.scores))
+row.side.colors <- sapply(ordered.gene.scores, function(x){
+   rgb.tuple <- row.color.space(abs(x)/max.score)
+   rgb(rgb.tuple[1]/255, rgb.tuple[2]/255, rgb.tuple[3]/255, 1)
+})
+
+row.side.colors <- (as.matrix(row.side.colors))
+
+heatmap(gene.data, Rowv = ordered.gene.scores, Colv = cls.oxphos, ColSideColors=col.side.color, RowSideColors= row.side.colors, col = body.color.palette, main = "Selecting Genes by Fold Change (t-test)")
+```
+with `r length(selected.genes)` genes
+
+and Permutation Test 1
+```{r}
+t.selected <- (inter[inter[,3],c(1,2,4)])
+row.names(t.selected) <- all.genes.fc[inter[,3]]
+selected.in.others <- sort(rowSums(t.selected), decreasing=T)
+selected.in.others <- selected.in.others[selected.in.others > 0]
+
+selected.genes <- names(selected.in.others)
+selected.gene.scores <- oxphos.perm.1[selected.genes,"class..fold.change"]
+names(selected.gene.scores) <- selected.genes
+ordered.gene.scores <- sort(selected.gene.scores)
+
+gene.data <- exprs(lymphoma.oxphos[names(ordered.gene.scores),])
+
+max.score <- max(abs(ordered.gene.scores))
+row.side.colors <- sapply(ordered.gene.scores, function(x){
+   rgb.tuple <- row.color.space(abs(x)/max.score)
+   rgb(rgb.tuple[1]/255, rgb.tuple[2]/255, rgb.tuple[3]/255, 1)
+})
+
+row.side.colors <- (as.matrix(row.side.colors))
+
+heatmap(gene.data, Rowv = ordered.gene.scores, Colv = cls.oxphos, ColSideColors=col.side.color, RowSideColors= row.side.colors, col = body.color.palette, main = "Selecting Genes by Fold Change (Permutation t-test)")
+```
+with `r length(selected.genes)` genes
+
+
+## Concluding Remarks
+The `limma` results were likely the most sensitive of the set, but has the least overlap with other strategies. The OxPhos results weren't well separted by `limma`, though this could be because too few genes were left after variance filtering. The results from `limma` were in fact stronger when supported by multiple tests. 

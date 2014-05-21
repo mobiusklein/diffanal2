@@ -13,7 +13,10 @@ Depends:
     genefilter,
     limma,
     plyr,
-    doMC
+    doMC,
+    biomaRt
+Suggests:
+    knitr
 License: DFL
 Collate:
     'diffanal2.R'
@@ -21,6 +24,10 @@ Collate:
     'summary.stats.R'
     'limma.test.R'
     'perm.legacy.R'
+    't.score.R'
     't.test.R'
     'probeset.annotation.R'
     'diffanal.results.R'
+    'variation.filter.R'
+    'package.data.R'
+VignetteBuilder: knitR

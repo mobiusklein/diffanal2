@@ -40,7 +40,7 @@ many2one <- function( cls )
 #' @param exhaustive Boolean, whether or not to explore all permutations
 #' @param control A binary confounder label, like cls. Enforces restricted constructin of permutations of \code{cls}.
 #' @export
-permute.binarray <- function( cls, nperm=1, balanced=F, equalized=F, seed=1,
+permute.binarray <- function( cls, nperm=1, balanced=F, equalized=F, seed=NULL,
                                   exhaustive=F, control=NULL)
 {
   if ( !is.null(dim(cls)) )
@@ -51,7 +51,10 @@ permute.binarray <- function( cls, nperm=1, balanced=F, equalized=F, seed=1,
   lev <- my.levels(cls)
   m  <- length(cls)
   perm <- matrix( NA, nrow=nperm, ncol=length(cls) )
-  if ( !is.null(seed) ) set.seed(seed)
+  if ( !is.null(seed) ){
+    set.seed(seed)
+    verbose("Seed set: ", seed)
+  } 
   
   # non-binary response variable
   #
@@ -208,9 +211,9 @@ permute.binarray <- function( cls, nperm=1, balanced=F, equalized=F, seed=1,
 #' @param exprs gene-by-sample numeric expression matrix
 #' @param perm.labels A matrix of row of permuted group mapping factors
 #' @return A numeric matrix of t-scores for each gene for each permutation
-perm.tscore <- function(exprs, perm.labels){
+perm.tscore <- function(exprs, perm.labels, alternative){
   perm.scores <- alply(perm.labels, 1, function(labels, exprs){
-    rowttests(exprs, fac=as.factor(labels), tstatOnly=T)['statistic']
+    t.score(exprs, as.factor(labels), alternative=alternative)['score']
   }, exprs)
   perm.scores <- do.call(cbind, perm.scores)
   names(perm.scores) <- seq_along(perm.scores)
@@ -234,10 +237,11 @@ perm.tscore <- function(exprs, perm.labels){
 #' @return diffanal.results instance
 diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs.all = F, 
                       nperm=1, exhaustive=T, ncores=1, summary.transform = unlog,
-                      ngenes = 250, smoother = 1, p.adjust.method = 'fdr',
-                      alternative = c("two.sided", "less", "greater"),
+                      ngenes.results = 250, smoother = 1, p.adjust.method = 'fdr',
+                      alternative = c("two.sided", "less", "greater"), seed = NULL,
                       do.F.stat = F,
                       ...){
+  
   model.terms <- get.model.formula.terms(model.formula)
   predictor <- model.terms[1]
   confounders <- model.terms[-1]
@@ -246,12 +250,16 @@ diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs
     confounders <- NULL
   }
   parallel = F
+  progress = "none"
   if(ncores > 1 && require(doMC)){
     registerDoMC(ncores)
     parallel = T
+    verbose("Running tests in parallel")
   } else {
     registerDoSEQ()
+    progress = "text"
   }
+  
   # Error check the confounders
   sapply(confounders, function(col){
     if(!length(my.levels(pheno.model.frame[,col]) == 2)){
@@ -265,55 +273,67 @@ diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs
   
   partitions <- compute.partitions(pheno.model.frame, predictor)
   pairs <- compute.partition.pairs(partitions, one.vs.all)
-  results <- alply(pairs, 1, function(pair, one.vs.all, alternative){
+  results <- alply(pairs, 1, function(pair, one.vs.all, alternative, seed){
     verbose("Handling perms of", pair[1], "and", pair[2], "\n")
     # Reduce phenotype labels to binary comparison
     pheno.subset <- NULL
     asymp.labels <- NULL
     if(one.vs.all){
       pheno.subset <- pheno.model.frame
-      asymp.labels <- as.factor(pheno.subset[,predictor] == unlist(pair[1]))
+      asymp.labels <- as.factor(pheno.subset[,predictor] == unlist(pair[[1]]))
     } 
     else{ 
-      pheno.subset <- rbind(pheno.model.frame[pheno.model.frame[,predictor] == pair[1],],
-                            pheno.model.frame[pheno.model.frame[,predictor] == pair[2],])
+      pheno.subset <- rbind(pheno.model.frame[pheno.model.frame[,predictor] == pair[[1]],],
+                            pheno.model.frame[pheno.model.frame[,predictor] == pair[[2]],])
       asymp.labels <- as.factor(as.character(pheno.subset[,predictor]))
     } 
-    
+        
     # Mirror sample reduction in expression data
-    exprs.subset <- exprs[,pheno.subset$.rownames]
+    exprs.subset <- exprs[, pheno.subset$.rownames]
     confounders.subset <- NULL
     if(!is.null(confounders)){
       confounders.subset <- as.factor(pheno.subset[,confounders])
     }
     
-    obs <- rowttests(exprs.subset, asymp.labels)
-    asymp.score <-obs[,'statistic']
+    obs <- t.score(exprs.subset, asymp.labels, do.test=T, alternative=alternative)
+    asymp.score <-obs[,'score']
     asymp.p.values <- obs[,'p.value']
     
     # Build set of label permutations
     perm.labels <- permute.binarray(asymp.labels, nperm=nperm, 
                                     exhaustive=exhaustive, 
-                                    control = confounders.subset)
-    perm.scores <- perm.tscore(exprs.subset, perm.labels)
+                                    control = confounders.subset, seed = seed)
+    perm.scores <- perm.tscore(exprs.subset, perm.labels, alternative)
+    
+    
+    #return(list(perm.scores=perm.scores, asymp.score = asymp.score))
     
     # Compute the Permutation p-value. Computes the upper tail score. 
     perm.p.values <- sapply(seq(1,nrow(perm.scores)), function(i, perm.scores, asymp.score, 
                                                                alternative, smoother){
+      
       perm.scores <- perm.scores[i,]
       asymp.score <- asymp.score[i]
+      
+      #verbose("On gene ", i, '----------')
+      #verbose("Asymptotic Score: ", asymp.score)
+      #print(perm.scores)
+      
       # Sum gets the count of boolean TRUE
       perm.p <- NULL
       if(alternative == "greater") {
-        perm.p <- (sum(perm.scores > asymp.score) + smoother)/(length(perm.scores) + smoother)
+        perm.p <- (sum(perm.scores >= asymp.score) + smoother)/(length(perm.scores) + smoother)
+        #print(sum(perm.scores > asymp.score))
       }
-      if(alternative == "less") {
-        perm.p <- (sum(perm.scores < asymp.score) + smoother)/(length(perm.scores) + smoother)
+      else if(alternative == "less") {
+        perm.p <- (sum(perm.scores <= asymp.score) + smoother)/(length(perm.scores) + smoother)
+        #print(sum(perm.scores < asymp.score))
       }
-      if(alternative == "two.sided") {
-        perm.p <- (sum(abs(perm.scores) > asymp.score) + smoother)/(length(perm.scores) + smoother)
+      else if(alternative == "two.sided") {
+        perm.p <- (sum(abs(perm.scores) >= abs(asymp.score)) + smoother)/(length(perm.scores) + smoother)
+        #print(sum(abs(perm.scores) > asymp.score))
       }
-      
+      #verbose("Permutation P: ", perm.p)
       return(perm.p)
     }, perm.scores, asymp.score, alternative, smoother)
     names(perm.p.values) <- row.names(exprs.subset)
@@ -325,14 +345,16 @@ diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs
     
     return(list(asymp.p.values=asymp.p.values,asymp.t=asymp.score,
          perm.p.values=perm.p.values, max.t=max.t))
-  }, one.vs.all, alternative, .parallel = parallel)
-
+  }, one.vs.all, alternative, seed = seed, .parallel = parallel, .progress = progress)
+  
+  ## Extract and format significance values ----------------------------
+  
   asymp.p.values <- lapply(results, function(test){test[["asymp.p.values"]]})
   asymp.p.values <- do.call(cbind, asymp.p.values)
   colnames(asymp.p.values) <- apply(pairs, 1, function(row){paste(row[1], row[2], 
                                                                 'asymp.p.value', sep=JOIN.CHR)})
   adjust.asymp.p.values <- apply(asymp.p.values, 2, p.adjust, p.adjust.method)
-  colnames(adjust.asymp.p.values) <- gsub("p.value", "adjusted.p.value", colnames(asymp.p.values))
+  colnames(adjust.asymp.p.values) <- gsub("asymp.p.value", "adj.asymp.p.value", colnames(asymp.p.values))
     
     
   asymp.t.scores <- lapply(results, function(test){test[["asymp.t"]]})
@@ -350,18 +372,18 @@ diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs
   colnames(perm.p.values) <- apply(pairs, 1, function(row){paste(row[1], row[2], 
                                                               'perm.p.value', sep=JOIN.CHR)})
   adjust.perm.p.values <- apply(perm.p.values, 2, p.adjust, p.adjust.method)
-  colnames(adjust.perm.p.values) <- gsub("p.value", "adjusted.p.value", colnames(perm.p.values))
+  colnames(adjust.perm.p.values) <- gsub("perm.p.value", "adj.perm.p.value", colnames(perm.p.values))
   
   F.stats <- NULL
   if(do.F.stat){
     F.stats <- do.aov(exprs, pheno.model.frame, model.formula)  
   }
   
-  # Summary statistics
+  # Summary statistics --------------------------------------------
   transform.exprs <- summary.transform(exprs)
   results <- do.summaries(transform.exprs, partitions, pairs, one.vs.all)
-  
-  # Construct Results Table
+    
+  # Construct Results Table --------------------------------------------
   results <- c(list(asymp.p.values=asymp.p.values, 
                     adj.asymp.p.values=adjust.asymp.p.values,
                     asymp.t.scores=asymp.t.scores, 
@@ -374,14 +396,15 @@ diffanal.perm.t.test <- function(exprs, pheno.model.frame, model.formula, one.vs
     results <- c(results, list(F.stats=F.stats))
   }
   
-  print(names(results))
-  
   results.table <- do.call(cbind, results)
   names(results.table) <- c(unlist(lapply(results, colnames)))
   results.table <- cbind(gene = row.names(results.table), results.table)
   
-  results.table <- sort.diffanal.results(results.table, colnames(results$adj.perm.p.values), ngenes)
-  results.table <- diffanal.results(results.table, ngenes=ngenes, unique=F, column.groups=lapply(results, colnames))
+  results.table <- sortby(results.table, 
+                                         colnames(results$adj.perm.p.values), ngenes.results)
   
+  results.table <- diffanal.results(results.table, ngenes=ngenes.results,
+                                    column.groups=lapply(results, colnames))
+  verbose("done")
   return(results.table)
 }

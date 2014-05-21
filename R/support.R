@@ -1,20 +1,11 @@
-#' @import plyr
-#' @import genefilter
-
-# Column names with aggregate meaning will have tokens joined by the JOIN.CHR
-# e.g. cls1-cls2-p.value means the p.value comparing cls1 and cls2.
-JOIN.CHR = ".."
-SAMPLE.ID.COL <- '.rownames'
-
-
 #' Print each argument to stdout if the verbose option or .diffanal.verbose option
 #' has been set to true. Set these options using options(...).
 verbose <- function(...){
   opt <- getOption("verbose", F) || getOption(".diffanal.verbose", F)
   if(!opt) invisible(NULL)
   msgs <- list(...)
-  msgs <- do.call(paste, c(msgs, '\n'))
-  cat(msgs)
+  msgs <- do.call(paste, c(msgs))
+  message(msgs)
 }
 
 #' Converts a list of terms into a formula object for building models with
@@ -22,7 +13,6 @@ formula.from.list <- function(predictor, confounders = list()){
   # Attach the predictor and tilde first
   relation <- paste("~", predictor)
   # Combine any confounders into a chain of additions
-  verbose("Confounders: ", confounders)
   trailing.terms <- do.call(paste, c(confounders, sep = " + "))
   # If there are trailing terms to merge
   if(length(trailing.terms) > 0){
@@ -35,8 +25,8 @@ formula.from.list <- function(predictor, confounders = list()){
 
 get.model.formula.terms <- function(model.formula){
   model.formula.terms <- terms(model.formula)    
-  col.names <- row.names(attr(model.formula.terms, 'factors'))
-  return(col.names)
+  term.names <- row.names(attr(model.formula.terms, 'factors'))
+  return(term.names)
 }
 
 #' The predictor is always stored in the first position of the formula's
@@ -66,22 +56,31 @@ unlog <- function(exprs){
 
 #' Remove samples that are NA in any of the model dimensions
 clean.samples <- function(exprs, pheno, model.formula.cols){
+  verbose("Cleaning data, removing samples with NA phenotype data")
+  start <- ncol(exprs)
+  name.hold <- names(pheno) 
+  rname.hold <- row.names(pheno)
   # Must be as.data.frame in order to prevent vectorizing when only one 
-  # column is selected in formula. 
+  # column is selected in formula.
   na.samples <- Reduce(`|`, as.data.frame(is.na(pheno[,model.formula.cols])))
   # Drop pheno rows with NA attributes
-  pheno <- pheno[!na.samples,]
+  pheno <- as.data.frame(pheno[!na.samples,])
+  names(pheno) <- name.hold
+  row.names(pheno) <- rname.hold[!na.samples]
   # Drop corresponding exprs columns 
   exprs <- exprs[,!na.samples]
+  verbose(start-ncol(exprs), " samples dropped")
   return(list(exprs=exprs, pheno=pheno))
 }
 
 #' Cleans up the pheno.model.frame
 #' @param pheno A data.frame containing predictor and confounder labels for each sample
 #' @param model.formula.cols A vector of strings that label which columns from \code{pheno} to keep
-prepare.pheno.frame <- function(pheno, model.formula.cols){
+prepare.pheno.frame <- function(pheno, model.formula.cols){  
+  rname.hold <- row.names(pheno)
   model.cols <- as.data.frame(pheno[, model.formula.cols])
   names(model.cols) <- model.formula.cols
+  row.names(model.cols) <- rname.hold
   model.cols <- name_rows(model.cols)
   model.cols <- model.cols[order(model.cols[model.formula.cols[1]]),]
   # column vectors with the name attribute breaks dlply  
@@ -89,6 +88,7 @@ prepare.pheno.frame <- function(pheno, model.formula.cols){
     names(model.cols[i]) <- NULL
     attr(model.cols[i], '.Names') <- NULL
   }
+  row.names(model.cols) <- rname.hold
   return(model.cols)
 }
 

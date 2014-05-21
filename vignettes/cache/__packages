@@ -1,0 +1,13 @@
+Biobase
+BiocGenerics
+base
+biomaRt
+diffanal2
+doMC
+foreach
+genefilter
+ggplot2
+iterators
+knitr
+limma
+plyr

@@ -8,7 +8,7 @@
 #' @param column.groups A list of the different subclasses of columns. \code{list("p.value", "adj.p.value", "fold.changes", "means", "std.devs")}. \code{attr}
 #' @param call A symbolic record of the call parameters. Useful for merging and writing reports. \code{attr}
 #' @export
-diffanal.results <- function(obj, ngenes = Inf, unique = F, column.groups, call = NULL){
+diffanal.results <- function(obj, ngenes = Inf, is.unique = F, column.groups, call = NULL){
     
   # Attach S3 class descriptor
   class(obj) <- c('diffanal.results', class(obj))
@@ -16,9 +16,12 @@ diffanal.results <- function(obj, ngenes = Inf, unique = F, column.groups, call 
     column.groups[['descriptives']] <- character()
   }
   column.groups[['descriptives']] <- unique(c(column.groups[['descriptives']], "gene"))
+  if(!is.null(obj$gene)){
+    obj$gene <- as.character(obj$gene)
+  }
   # Attach attributes
   attr(obj, 'ngenes') <- ngenes
-  attr(obj, 'unique') <- unique
+  attr(obj, 'is.unique') <- is.unique
   attr(obj, 'column.groups') <- column.groups
   attr(obj, 'call') <- call
   
@@ -27,7 +30,7 @@ diffanal.results <- function(obj, ngenes = Inf, unique = F, column.groups, call 
 
 NON.CLASS.GRPS <- c("F.stats")
 
-#' @rdname Column Grouping
+#' @rdname ColumnGrouping
 #' @title column.groups
 #' @param x An R Object
 #' @export
@@ -35,62 +38,58 @@ NON.CLASS.GRPS <- c("F.stats")
   UseMethod('column.groups', x)
 }
 
+#' @rdname MethodsOfDiffanalResults
+#' @title Accessing column groups of \code{diffanal.results} objects
+#' @description Retrieves a list of column groups and associated columns from the object's attributes
 #' @S3method column.groups diffanal.results
 #' @method column.groups diffanal.results
+#' @return A list whose names are column group names and whose values are vectors of column names from the object. 
 `column.groups.diffanal.results` <- function(x){
   return(attr(x, 'column.groups'))
 }
 
-#' @rdname Column Grouping
-#' @param x An R Object
-#' @param value A character vector of column names in \code{x}
-#' @export
-`column.groups<-` <- function(x, value){
-  UseMethod("column.groups<-", x)
-}
-
-#' @export
-`column.groups<-.diffanal.results` <- function(x, value){
-  attr(x, 'column.groups') <- value
-}
-
-#' @rdname Column Grouping
-#' @param x An R object
-#' @param col.grp.names A vector of group names, as those returned by \link{\code{column.groups}}
+#' @rdname ColumnGrouping
+#' @title Retrieving the values of a set of column groups
+#' Given a character vector of column group names, retrieve only columns from those groups in the input object. 
+#' @param col.grp.names A vector of group names, as those returned by \code{column.groups}
 #' @return A subset of \code{x} containing only columns corresponding to those mapped by \code{col.grp.names}
 #' @export
 group <- function(x, col.grp.names){
   UseMethod("group", x)
 }
 
-#' @S3method group diffanal.results
+#'  @rdname MethodsOfDiffanalResults
+#'  @title Accessing one or more column groups' columns
+#'  @S3method group diffanal.results
 group.diffanal.results <- function(x, col.grp.names){
   grp.cols <- column.groups(x)
   grp.cols.sub <- grp.cols[col.grp.names]
-  sub.x <- as.data.frame(x[,unlist(grp.cols.sub)])
+  sub.x <- x[,unlist(grp.cols.sub)]
+  sub.x <- as.data.frame(sub.x)
   names(sub.x) <- unlist(grp.cols.sub)
+  row.names(sub.x) <- row.names(x)
   return(sub.x)
 }
 
-#' @S3method as.data.frame diffanal.results
-as.data.frame.diffanal.results <- function(x, row.names=NULL, ...){
-  obj<-as.data.frame.data.frame(x, row.names, list(...))
-  class(obj) <- c('diffanal.results', class(obj))
-  attr(obj, 'column.groups')  <- column.groups(x)
-  attr(obj, 'unique') <- attr(x, 'unique')
-  attr(obj, 'call') <- attr(x, 'call')
-  return(obj)
-}
-
+#' @rdname MethodsOfDiffanalResults
+#' @title Assigning genes to unique classes in a \code{diffanal.results} object
+#' @param obj A \code{diffanal.results} object that has not been made unique
+#' @param criteria.column A single column group name to select the class by
+#' @param score.fn A function to select which class to assign to from the criteria.column group. Defaults to \code{base::which.min}
 #' @S3method unique diffanal.results
 #' @method unique diffanal.results
-unique.diffanal.results <- function(obj, criteria.column="p.value", score.fn = which.min){
-  if(!("diffanal.results" %in% class(obj))) stop("Object must be of type `diffanal.results`")  
-  if(!(criteria.column %in% names(column.groups(obj)))) stop(paste("Criteria Column", criteria.column ,"not found in", do.call(paste, as.list(c("[", names(column.groups(obj)), "]")))))
-  if(attr(obj, 'unique')){
+unique.diffanal.results <- function(obj, criteria.column="adj.p.values", score.fn = which.min){
+  
+  # Validate Input
+  if(!("diffanal.results" %in% class(obj))) 
+    stop("Object must be of type `diffanal.results`")  
+  if(!(criteria.column %in% names(column.groups(obj)))) {
+    stop(paste("Criteria Column", criteria.column ,"not found in", 
+               do.call(paste, as.list(c("[", names(column.groups(obj)), "]")))))
+  }
+  if(attr(obj, 'is.unique')){
     stop("This table has already been made unique, and each gene assigned a class.")
   }
-  
   criteria.values <- as.data.frame(group(obj, criteria.column))
   compr.classes <- unlist(strsplit(x=column.groups(obj)[[criteria.column]],
                                    split=paste(JOIN.CHR, 
@@ -135,28 +134,12 @@ unique.diffanal.results <- function(obj, criteria.column="p.value", score.fn = w
   groups <- c(groups, unclassed.grps)
   
   # Repackage as diffanal.results instance
-  unique.table <- diffanal.results(unique.table, attr(obj, 'ngenes'), unique=T, groups, 
+  unique.table <- diffanal.results(unique.table, attr(obj, 'ngenes'), is.unique=T, groups, 
                                          attr(obj, 'call'))
   return(unique.table)
 }
 
-# @importFrom RJSONIO toJSON
-as.json <- function(table, ...){
-  json.obj <- list()
-  json.obj$columns.groups <- (column.groups(table))
-  json.obj$unique <- (attr(table, 'unique'))
-  json.obj$data <- alply(table, 1, function(x)x)
-  names(json.obj$data) <- NULL
-  json.obj <- toJSON(json.obj)
-  return(json.obj)
-}
-
-to.html <- function(table, ...){
-    
-}
-
 #' Perform row-wise comparison between a data.frame or matrix and a single vector
-#' 
 #' @param df A data.frame or matrix
 #' @param match A vector that shares columns with \code{df}
 #' @param cols Optionally, a character vector naming which columns to compare between \code{df} and \code{match}
@@ -172,22 +155,25 @@ row.eq <- function(df, match, cols){
   })
 }
 
-#' @name  sort.diffanal.results
-#' @title sort.diffanal.results
+#' @rdname MethodsOfDiffanalResults
+#' @name  sortby
+#' @title sortby
 #' @description  Given an unordered results table, order it by the column group given, and report the top ngenes given in each column of the given column group
 #' @param table A data.frame
 #' @param column.grp A set of columns from \code{table} or a data.frame that is parallel to it.
 #' @param ngenes The number of genes to return for each class.
-#' @S3method sort diffanal.results
-#' @method sort diffanal.results
-sort.diffanal.results <- function(table, column.grp, ngenes = 250){
-  
+#' @export
+sortby <- function(table, column.grp, ngenes = nrow(table)){
   sorts <- lapply(column.grp, function(column){
     order(table[,column])
   })
   
-  # Merge the assembled gene list, retaining @ngenes from each set. At most the set will
+  # Merge the assembled gene list, retaining ngenes from each set. At most the set will
   # contain number of comparisons
+  if(is.null(ngenes)){
+    ngenes <- nrow(table)
+  }
+  
   top.genes <- Reduce(function(a, b){
     a <- unlist(a)
     b <- unlist(b)
@@ -224,4 +210,29 @@ which.class.significant <- function(scores, alpha){
     }
   })
   return(results)
+}
+
+
+#' @rdname MethodsOfDiffanalResults
+#' @title Annotate a diffanal.results object from biomaRt
+#' @export
+annotate.diffanal.results <- function(table, dataset="hsapiens_gene_ensembl",
+                                      mapping="ensg",
+                                      symbol.idx="hgnc_symbol",
+                                      na.rm=F){
+  probe.data <- probeset.annotation(as.character(table$gene), 
+                                    dataset, mapping, 
+                                    symbol.idx, na.rm)
+  probe.data$gene <- row.names(probe.data)
+  anno.table <- join(table, probe.data, "gene", "left")
+  attr(table, "column.groups")$descriptives <- unique(c(column.groups(table)$descriptives, 
+                                                "symbol", "description"))
+  attrs <- attributes(table)
+  for(n in names(attrs)){
+    if(!(n %in% c('names','row.names'))){
+      attr(anno.table, n) <- attrs[[n]]
+    }
+  }
+  
+  return(anno.table)
 }

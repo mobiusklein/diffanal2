@@ -1,3 +1,5 @@
+#' @import biomaRt
+
 library(biomaRt)
 
 #' Maps probe names to gene names and descriptions
@@ -30,8 +32,10 @@ probeset.annotation <- function
   ##
   sNA.idx <- is.na(GS[,symbol.idx]) | GS[,symbol.idx]=="" # missing gene symbols
   dNA.idx <- is.na(GS[,"description"]) | GS[,"description"]=="" # missing descriptions
-  GS[sNA.idx,symbol.idx] <- GS[sNA.idx,1]
-  GS[dNA.idx,"description"] <- "No information for gene"
+  if(length(sNA.idx) > 0)
+    GS[sNA.idx,symbol.idx] <- GS[sNA.idx,1]
+  if(length(dNA.idx) > 0)
+    GS[dNA.idx,"description"] <- "No information for gene"
 
   verbose("\t",sum(sNA.idx)," probesets w/o gene symbol\n",sep="")
   verbose("\t",sum(dNA.idx)," probesets w/o description\n",sep="")
@@ -39,7 +43,7 @@ probeset.annotation <- function
   ## abort if less than 30% probesets match to gene symbols
   ##
   if ( sum(!is.na(match.idx <- match(probesetsMap,GS[,1])))<round(length(probesets)*.3) )
-    stop( "less than 30% probesets annotated, something wrong!" )
+    warning( "less than 30% probesets annotated, something wrong!" )
 
   ## create map with same order as input (unless na.rm)
   ##
@@ -51,6 +55,7 @@ probeset.annotation <- function
 
   ann
 }
+
 annotate.data <- function
 (
  dat,

@@ -7,6 +7,10 @@ do.mean <- function(exprs, partitions, one.vs.all){
   results <- lapply(partitions, function(partition){
     exprs.subset <- exprs[,partition];
     result <- rowMeans(exprs.subset)
+    if(any(is.infinite(result))){
+      print(head(exprs.subset))
+      stop("Infinite Mean")
+    }
     return(result)
   })
   results <- as.data.frame(do.call(cbind, results))
@@ -62,14 +66,18 @@ do.std.dev <- function(exprs, partitions, one.vs.all){
 do.fold.change <- function(means, pairs){
   # Adds the suffix to each group name to match the equivalent mean
   # column in the means frame
+  pairs <- as.data.frame(pairs)
   pair.cols <- apply(pairs, 2, paste, 'mean', sep=JOIN.CHR)
-  results <- as.data.frame(apply(pair.cols, 1, function(pair){
+  if(is.null(dim(pair.cols))){
+    pair.cols <- t(as.data.frame(pair.cols))
+  }
+  results <- apply(pair.cols, 1, function(pair){
     result <- means[,pair[[1]]] / means[,pair[[2]]]
     return(result)
-  }))
+  })
   col.names <- (apply(pairs, 1, function(ps){paste(ps[[1]], ps[[2]], 
                                                    'fold.change', sep=JOIN.CHR)}))
-  names(results) <- col.names
+  colnames(results) <- col.names
   rownames(results) <- rownames(means)
   return(results)
 }

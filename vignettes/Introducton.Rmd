@@ -1,0 +1,197 @@
+---
+title: "Introduction and Overview of Usage"
+author: "Joshua Klein"
+output: html_document
+---
+<!--
+%!\SweaveUTF8
+%\VignetteEngine{knitr::rmarkdown}
+%\VignetteIndexEntry{Introduction and Overview of Usage}
+-->
+```{r echo=FALSE}
+suppressPackageStartupMessages(library(diffanal2))
+options(verbose=F)
+options(.diffanal.verbose=F)
+```
+
+# Introduction to diffanal2
+
+## What is diffanal2?
+
+Based on the original `diffanal.R` script, `diffanal2` supports performing differential gene expression analysis of microarray data using asymptotic and permutation t-tests, as well as a new feature to support using `limma` - *Linear Models for Microarray Data*. It also supports accepting an arbitrary scoring function, so you can extend it without needing to rewrite the guts of the program.
+
+## A Brief Example
+
+Start by loading a microarray dataset. We'll use a lymphoma sample study with 116 participants.
+```{r}
+data(lymphoma.2010)
+lymphoma
+```
+Each sample in the study was clinically characterized several times.
+```{r}
+head(pData(lymphoma))
+```
+For now, let's assume the column **`meta.1`** as being the phenotype of interest for this dataset. While `diffanal2` can operate on a matrix of expression data and a phenotype vector or data.frame, it knows how to unpack an `ExpressionSet` object and will assume me mean for the phenotype to be taken from the `pData` member of the object unless told otherwise. We can specify the predictor phenotype either as the first parameter of a `formula` object passed to the `model.formula` parameter, or as a single string character vector to the `predictor` parameter. 
+
+To start small, we can use a regular t-test for our scoring function. We'll also turn on the verbose option to see each step in the pipeline. This command will verify that the data is clean, without any NA values in the phenotype, removing any samples that do, perform variance filtering using the `mad` statistic to discard genes with extreme variability, keeping the top 5000 (see the `ngenes.filter` parameter to change this), and then partition and test the data.
+```{r}
+library('diffanal2')
+options(verbose=T)
+t.test_meta.1 <- df2.t.test(lymphoma, model.formula = ~ meta.1)
+```
+
+For a multinomial phenotype like this one, the test will run in one-vs-all mode by default, comparing all of the memebers of one class to all members of all other classes, for each class present in the phenotype selected. The results are returned as an instance of `diffanal.results data.frame`, an S3 class built on top of a data.frame with additional methods.
+
+```{r}
+head(t.test_meta.1)
+```
+
+The data.frame shown has a column for each class compared for each summary statistic (`mean`,`median`, `std.dev`, `mad`), and a mean `fold.change`, `t-score`, `p-value` and FDR-adjusted `p-value` for each class-class comparison done. The table is also sorted by FDR-adjusted `p-value`, smallest to largest. In this case, there were six classes (`BCR, HR, OxPhos, Not.BCR, Not.HR,` and `Not.OxPhos`) and three comparisons (`BCR-Not.BCR, HR-Not.HR` and `OxPhos-Not.OxPhos`). Each of these types of statistics is considered a "column.group", and can be accessed using the `column.groups` function to get the list of column groups in the table and the corresponding columns, or given the name of a group, say, "means", all columns from that group using the `group` function. 
+
+```{r t-test,cache=T}
+column.groups(t.test_meta.1)
+
+head(group(t.test_meta.1, "means"))
+```
+
+There are a lot of columns in this table, and usually, only one of the comparisons is interesting, the one that minimizes or maximizes the statistic. To assign each gene to a class, we can use the `unique.diffanal.results` (as an S3 method, we only need to write `unique`), specifying a column group and a scoring function to choose the best class for each gene from the set of scores in each group. The default column group is `adj.p.values` and the default scoring function is `base::which.min`. 
+
+```{r unique-table, cache=T}
+ut.test_meta.1 <- unique(t.test_meta.1, criteria.column = "adj.p.values", score.fn = which.min)
+head(ut.test_meta.1)
+```
+
+All of the statistic columns have been reduced to just `class..<statistic>`, and a new `class` column was added, showing which class that gene was assigned to. Note that since the gene order hasn't changed, many of the genes will appear to be sorted by class, but this is a side effect of the initial ordering, not of the `unique` function.
+
+## Using `limma` with diffanal2
+
+The t-test strategy is simple, and that has advantages and disadvantages. We can also fit a gene-wise linear model using the `limma` package within `diffanal2`. The call is very similar, but instead of using the t-test wrapper, `df2.t.test`, we use the limma wrapper, `df2.limma`. This function takes most of the same arguments that the t-test version does, but it also handles confounders (more on that later).
+
+```{r limma-1, cache=T}
+limma_meta.1 <- df2.limma(lymphoma, model.formula= ~meta.1)
+head(limma_meta.1)
+```
+
+The result table for a limma strategy is similar to the t-test strategy, with a few key differences. There is an additional comparison statistic, `lods`, standing for log-odds of differential expression, which `limma::eBayes` computes. The class means and standard errors are also extracted from `limma::lmFit`, and the complementary class means are backsolved from `limma::contrast.fit`'s fold change coefficient. Additionally, the table has two additional un-classed statistics, `F.score` and `F.p.value`, which are not part of the other strategies by default (see `do.F.stat` parameter in `do.diffanal2` for how to add it).
+
+When setting up class comparisons, limma creates a contrast matrix using `makeContrasts`. This function expects a list of expressions or strings that describe operations on different classes (columns in the design matrix) to test for differential expression. This is as simple as `A - A'` for one-vs-one comparisons. When doing one-vs-all comparisons, limma instead needs to compute `A - mean(A')`. The mean used is the arithmetic mean, despite these being log-normalized data. 
+
+The limma strategy can also calculate the influence of a confounding variable has on the mean expression of a gene, and use that information to calculate the "true" mean gene expression as a result of the predictor variable. A confounder can be specified by adding additional terms to the `model.formula` parameter, or by specifying a list of character strings to the `confounder` parameter. While there is no reason to believe so, what if we believed that the Class label in the phenotype data was a confounder? To test this, we would run:
+
+```{r limma-2, cache=T}
+limma_meta.1xClass <- df2.limma(lymphoma, model.formula= ~ meta.1 + Class)
+head(limma_meta.1xClass)
+```
+
+To get an idea of how the addition of a confounder changes the mean calculation, try this plot:
+```{r change-in-mean, cache=T}
+gs <- intersect(row.names(limma_meta.1), row.names(t.test_meta.1))
+means.meta.1 <- group(limma_meta.1[gs,], "means")
+means.meta.1xClass <- group(limma_meta.1xClass[gs,], "means")
+means.frame <- cbind(m1 = means.meta.1, m2 = means.meta.1xClass)
+for(i in seq(1:3)){
+  plot(means.meta.1[,i] ~ means.meta.1xClass[,i], 
+       ylab=paste("meta.1", colnames(means.meta.1)[i]), 
+       xlab=paste("meta.1xClass", colnames(means.meta.1xClass)[i],
+                  main = "Comparing difference in Means"))
+  abline(0,1)
+}
+```
+The line through the origin denotes 
+
+## Running permutation t-tests
+
+A a core part of `diffanal` was the permutation test, which let it you permute the class/phenotype labels to test the robustness of the class results by using the `perm.t.test` strategy. This test also allows you to specify confounders, and will only generate label permutations that swap samples within the same confounder class. At this time, only binary confounders are supported. The number of permutations ran is controlled by the `nperm` parameter, and augmented by the `exhaustive` parameter, which limits the number of permutations to generate to the maximum number of unique permutations available. 
+
+Because each class comparison is reperformed many, many times, this strategy can run each class comparison in parallel, controlling the number of parallel processors used by changing the `ncores` parameter. If `ncores` is `r 1`, the default, the comparisons run sequentially. This multiprocessing is done using `plyr` and `doMC`. `doMC` makes initializing the environment of the child processes trivial because they are `fork`s of the parent process. 
+
+```{r perm.t, cache=T}
+perm.t.meta.1 <- df2.perm.t.test(lymphoma, model.formula= ~ meta.1 + Class, 
+                                 nperm = 100, ncores=3)
+head(perm.t.meta.1)
+```
+
+The permutation test strategy outputs the asymptotic t statistic, resulting p-value, and FDR p-value, as well as the permutation test's `max-t-score`, and the `permutation p-value` and the associated FDR. The results should be otherwise identical to the normal t-test strategy.
+
+```{r perm.t-vs-t}
+gs2 <- intersect(row.names(perm.t.meta.1), row.names(t.test_meta.1))
+cols <- colnames(group(perm.t.meta.1[gs2,], "means"))
+for(i in seq(1:3)){
+  plot(group(perm.t.meta.1[gs2,], "means")[,i], 
+       group(t.test_meta.1[gs2,], "means")[,i], ylab= "t-test", 
+       xlab= "permutation t-test",
+       main = cols[i])
+  abline(0,1)
+}
+```
+
+## Adding annotations to `diffanal.results`
+
+To add annotations from `biomaRt` to a table, call the following function, (Note that it requires an internet connection)
+```{r annotate, eval = T, cache=T}
+limma_meta.1xClass <- annotate.diffanal.results(table = limma_meta.1xClass,
+                          dataset ="hsapiens_gene_ensembl",
+                          mapping ="ensg",
+                          symbol.idx ="hgnc_symbol",
+                          na.rm = F)
+
+head(group(limma_meta.1xClass, "descriptives"))
+```
+The gene symbol and a short description are added to each row as part of the `r "descriptives"` group. Warnings be shown if genes in the results aren't in the targeted dataset on Biomart
+
+
+## Short Questions with Short Answers
+
+### How do I *not* use variance filtering?
+The `ngenes.filter` parameter to any of the `df2.*` or `do.diffanal2` functions controls how many genes to select based on the filter score. If `ngenes.filter` is `r NULL`, though `diffanal2` will skip the step entirely.
+
+### Can I keep the `limma` data structures to use for downstream `limma` analysis? 
+Yes, if you used `df2.limma` or directly used the "limma" strategy, you can access the fit without contrasts, the fit with contrasts and eBayes, and the contrast matrix itself by calling `attr(result, "fits")`, which returns these objects as a list. 
+
+### Can I create my own scoring strategy? 
+Yes, by calling `do.diffanal2` directly, you can pass a function to the `strategy` parameter, it will call that function on the dataset. At the moment, this is not especially useful since in order to support drastically different workflows like `limma`'s, I didn't make any decisions about how a custom scoring function ought to be applied. You could look at the implementation of the t-test for an example:
+
+```{r}
+diffanal2:::diffanal.t.test
+
+diffanal2:::do.t.test
+```
+
+You could keep everything in diffanal.t.test the same, but replace the test statistic with one of your own choosing to apply to each partition pair. For instance, you could write a survival analysis function like this:
+
+```{r}
+do.coxph <- function(exprs, partitions, pairs, pheno.model.frame, surv, one.vs.all = F){
+  results <- apply(pairs, 1, function(pairs, exprs, partitions, pheno.frame, surv){    
+    exprs.subset <- NULL;
+    if(one.vs.all){
+      exprs.subset <- exprs
+      pheno.frame <- pheno.frame
+    } else {
+      exprs.subset <- exprs[,c(partitions[[ pairs[[1]] ]], partitions[[ pairs[2] ]])];
+      pheno.frame <- pheno.frame[c(partitions[[ pairs[[1]] ]], partitions[[ pairs[2] ]]),]
+    }
+        
+    grouping <- as.factor(colnames(exprs.subset) %in% partitions[[ pairs[[1]] ]])
+    surv.formula <- as.formula(paste(surv, " ~ expr.subset + strata(..grouping..)"))
+    surv.frame <- cbind(..grouping.. = grouping, expr.subset = expr.subset, pheno.frame)
+    
+    test.stats <- coxph(surv.formula, data=surv.frame)
+    return(test.stats)
+            
+  },exprs,partitions, pheno.model.frame, surv)
+  output <- list()
+  
+  p.vals <- t(ldply(results, function(x){
+      ltest <- -2 * (x$loglik[1] - x$loglik[2])
+      pv <- 1 - pchisq(ltest, 1)
+      return(pv)
+    }))
+  row.names(p.vals) <- row.names(exprs)
+  colnames(p.vals) <- apply(pairs, 1, function(ps){paste(ps[[1]], ps[[2]], "p.value", sep=JOIN.CHR)})
+  output$p.values <- p.vals
+  
+  return(output)
+}
+```
+
+This functionis designed to apply coxph to each gene, stratified by the predictor label.
